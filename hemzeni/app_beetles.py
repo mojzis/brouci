@@ -1,5 +1,5 @@
 import streamlit as st
-from controller import BeetleController
+from hemzeni.controller import BeetleController
 
 
 def main() -> None:
@@ -23,7 +23,7 @@ def main() -> None:
         if result is None:
             continue
 
-        frame, human_positions = result
+        frame, human_positions, human_bboxes = result
 
         # Display frame
         FRAME_WINDOW.image(frame)
@@ -39,11 +39,11 @@ def main() -> None:
         # Stopped state
         st.write("Stopped")
 
-        if hasattr(st.session_state, "pred_list") and st.session_state.pred_list:
-            st.write("Last prediction:", st.session_state.pred_list[-1])
+        # if hasattr(st.session_state, "pred_list") and st.session_state.pred_list:
+        #     st.write("Last prediction:", st.session_state.pred_list[-1])
 
-            if hasattr(st.session_state, "hand"):
-                st.write("Last hand position:", st.session_state.hand)
+        #     if hasattr(st.session_state, "hand"):
+        #         st.write("Last hand position:", st.session_state.hand)
 
         if hasattr(st.session_state, "img"):
             FRAME_WINDOW.image(st.session_state.img)

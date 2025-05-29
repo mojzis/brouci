@@ -2,11 +2,13 @@
 name = "hemzeni"
 version = "0.1.0"
 description = "hemzeni"
+requires-python = ">=3.10,<3.11"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = "3.10.13"
+
 dependencies = [
+    # "python (>=3.10,<3.11)",
     # "marimo (>=0.13.6,<0.14.0)",
     "streamlit (>=1.45.0,<2.0.0)",
     "opencv-python (>=4.11.0.86,<5.0.0.0)",
@@ -14,6 +16,7 @@ dependencies = [
     "aipose (>=3.1.0,<4.0.0)",
     "torch (>=2.5.1,<2.6.0)",
     "pandas (>=2.2.3,<3.0.0)",
+    "flask (>=3.1.1,<4.0.0)",
 ]
 
 
@@ -23,3 +26,4 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.11.9"
+pytest = "^8.3.5"

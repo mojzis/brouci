@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Basic rules
+- when asked for a bigger task, stop first, think, provide a detailed plan and request that it be reviewed. store the plan into a new file within the plans directory
+- try to keep things in simple, very organized functions
+
 ## Project Overview
 
 Hemzeni is a real-time pose detection application that provides live webcam feeds with pose landmark visualization. The project offers different pose detection backends and interactive features:
@@ -136,3 +140,8 @@ All new code should use modern Python type annotations:
 - Use proper exception handling where appropriate
 - Log errors appropriately without spamming the console
 - Provide meaningful error messages to users via Streamlit's error display
+
+### Tests
+- every function apart from the app file should have a test
+- file app_beetles is not tested
+- file with tests are within the dir tests

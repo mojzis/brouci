@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>🪲 Beetle Detection & Head Following</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: white;
+            margin: 0;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #4CAF50;
+        }
+        
+        .video-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        #video-stream {
+            border: 3px solid #4CAF50;
+            border-radius: 10px;
+            max-width: 100%;
+            height: auto;
+        }
+        
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        .status {
+            background-color: #2a2a2a;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .status h3 {
+            color: #4CAF50;
+            margin-top: 0;
+        }
+        
+        .status-item {
+            margin: 10px 0;
+            font-family: monospace;
+        }
+        
+        .info-panel {
+            background-color: #333;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        
+        .legend {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .legend-item {
+            background-color: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .legend-item h4 {
+            margin: 0 0 10px 0;
+            color: #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🪲 Real-Time Beetle Detection & Head Following</h1>
+        
+        <div class="video-container">
+            <img id="video-stream" src="{{ url_for('video_feed') }}" alt="Video Stream">
+        </div>
+        
+        <div class="controls">
+            <button onclick="refreshStatus()">🔄 Refresh Status</button>
+            <button onclick="testHeadDetection()">🧪 Test Head Following</button>
+            <button onclick="toggleFullscreen()">🖥️ Fullscreen</button>
+        </div>
+        
+        <div class="status">
+            <h3>📊 System Status</h3>
+            <div id="status-content">
+                <div class="status-item">Loading status...</div>
+            </div>
+        </div>
+        
+        <div class="info-panel">
+            <h3>ℹ️ How It Works</h3>
+            <div class="legend">
+                <div class="legend-item">
+                    <h4>🪲 Regular Beetles</h4>
+                    <p>Kudlanka (red) and Blecha (blue) roam freely when no humans are detected, but flee when humans appear nearby.</p>
+                </div>
+                <div class="legend-item">
+                    <h4>👤🪲 Head Follower</h4>
+                    <p>Lachticek (purple) follows detected human heads, positioning itself above the person's head.</p>
+                </div>
+                <div class="legend-item">
+                    <h4>🎯 Detection Info</h4>
+                    <p>Frame counter, FPS, human count, and head follower status are displayed on the video.</p>
+                </div>
+                <div class="legend-item">
+                    <h4>🧪 Testing</h4>
+                    <p>Use the "Test Head Following" button to manually trigger head detection at the center of the frame.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Auto-refresh status every 2 seconds
+        setInterval(refreshStatus, 2000);
+        
+        // Initial status load
+        refreshStatus();
+        
+        function refreshStatus() {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    const statusDiv = document.getElementById('status-content');
+                    statusDiv.innerHTML = `
+                        <div class="status-item">Controller Initialized: ${data.controller_initialized ? '✅' : '❌'}</div>
+                        <div class="status-item">Beetles Count: ${data.beetles_count}</div>
+                        <div class="status-item">Beetles: ${data.beetles_names ? data.beetles_names.join(', ') : 'None'}</div>
+                        <div class="status-item">Head Follower Exists: ${data.head_follower_exists ? '✅' : '❌'}</div>
+                        <div class="status-item">Head Follower Name: ${data.head_follower_name || 'None'}</div>
+                        <div class="status-item">Head Follower Following: ${data.head_follower_following ? '🎯 YES' : '⏸️ NO'}</div>
+                        <div class="status-item">Head Follower Position: ${data.head_follower_position ? `(${Math.round(data.head_follower_position[0])}, ${Math.round(data.head_follower_position[1])})` : 'N/A'}</div>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error fetching status:', error);
+                    document.getElementById('status-content').innerHTML = '<div class="status-item">❌ Error loading status</div>';
+                });
+        }
+        
+        function testHeadDetection() {
+            fetch('/test_head_detection')
+                .then(response => response.json())
+                .then(data => {
+                    alert(`Head detection test: ${data.message}\nFollowing: ${data.is_following}\nPosition: (${Math.round(data.position[0])}, ${Math.round(data.position[1])})`);
+                    refreshStatus();
+                })
+                .catch(error => {
+                    console.error('Error testing head detection:', error);
+                    alert('Error testing head detection');
+                });
+        }
+        
+        function toggleFullscreen() {
+            const video = document.getElementById('video-stream');
+            if (video.requestFullscreen) {
+                video.requestFullscreen();
+            } else if (video.webkitRequestFullscreen) {
+                video.webkitRequestFullscreen();
+            } else if (video.msRequestFullscreen) {
+                video.msRequestFullscreen();
+            }
+        }
+        
+        // Handle video stream errors
+        document.getElementById('video-stream').onerror = function() {
+            this.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQ4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjMzMzIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIyNCIgZmlsbD0iI2ZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkNhbWVyYSBFcnJvcjwvdGV4dD48L3N2Zz4=';
+        };
+    </script>
+</body>
+</html>
