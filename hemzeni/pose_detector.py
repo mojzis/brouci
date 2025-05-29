@@ -30,6 +30,10 @@ class PoseDetector:
         self.last_human_bboxes: list[tuple[float, float, float, float]] = []
         self.last_head_positions: list[tuple[float, float]] = []
         self.last_keypoints: NDArray[np.float64] = np.array([])
+        # Grace period attributes
+        self.grace_period_frames: int = 3  # Or your desired grace period
+        self.frames_since_last_detection: int = 0
+        self.last_valid_detection_results: tuple | None = None
 
     def detect(
         self, frame: NDArray[np.uint8]
@@ -53,66 +57,95 @@ class PoseDetector:
             small_frame = cv2.resize(frame, (small_width, small_height))
 
             # Detect poses
-            keypoints = self.model(small_frame)
+            detected_keypoints_objects = self.model(small_frame)
 
-            # Extract human positions, bounding boxes, and head positions
-            raw_positions, raw_bboxes, raw_heads = self._extract_human_data(keypoints)
-
-            # Scale positions, bboxes, and heads back to original frame size
-            human_positions = []
-            human_bboxes = []
-            head_positions = []
-
-            for pos in raw_positions:
-                scaled_x = pos[0] / self.detection_scale
-                scaled_y = pos[1] / self.detection_scale
-                human_positions.append((scaled_x, scaled_y))
-
-            for bbox in raw_bboxes:
-                x, y, w, h = bbox
-                scaled_bbox = (
-                    x / self.detection_scale,
-                    y / self.detection_scale,
-                    w / self.detection_scale,
-                    h / self.detection_scale,
+            if detected_keypoints_objects:  # Detection successful
+                # Extract human positions, bounding boxes, and head positions
+                raw_positions, raw_bboxes, raw_heads = self._extract_human_data(
+                    detected_keypoints_objects
                 )
-                human_bboxes.append(scaled_bbox)
 
-            for head in raw_heads:
-                scaled_x = head[0] / self.detection_scale
-                scaled_y = head[1] / self.detection_scale
-                head_positions.append((scaled_x, scaled_y))
+                # Scale positions, bboxes, and heads back to original frame size
+                human_positions = []
+                human_bboxes = []
+                head_positions = []
 
-            # Prepare keypoint array for plotting
-            keypoint_array = np.array([value.raw_keypoint for value in keypoints])
-            if self.detection_scale != 1.0:
-                keypoint_array = keypoint_array / self.detection_scale
+                for pos in raw_positions:
+                    scaled_x = pos[0] / self.detection_scale
+                    scaled_y = pos[1] / self.detection_scale
+                    human_positions.append((scaled_x, scaled_y))
 
-            # Cache results
-            self.last_human_positions = human_positions
-            self.last_human_bboxes = human_bboxes
-            self.last_head_positions = head_positions
-            self.last_keypoints = keypoint_array
+                for bbox in raw_bboxes:
+                    x, y, w, h = bbox
+                    scaled_bbox = (
+                        x / self.detection_scale,
+                        y / self.detection_scale,
+                        w / self.detection_scale,
+                        h / self.detection_scale,
+                    )
+                    human_bboxes.append(scaled_bbox)
 
-            return (
-                human_positions,
-                human_bboxes,
-                head_positions,
-                keypoint_array,
-                keypoints,
-            )
+                for head in raw_heads:
+                    scaled_x = head[0] / self.detection_scale
+                    scaled_y = head[1] / self.detection_scale
+                    head_positions.append((scaled_x, scaled_y))
+
+                # Prepare keypoint array for plotting
+                keypoint_array = np.array(
+                    [value.raw_keypoint for value in detected_keypoints_objects]
+                )
+                if self.detection_scale != 1.0:
+                    keypoint_array = keypoint_array / self.detection_scale
+
+                # Cache results
+                self.last_human_positions = human_positions
+                self.last_human_bboxes = human_bboxes
+                self.last_head_positions = head_positions
+                self.last_keypoints = keypoint_array
+                self.last_valid_detection_results = (
+                    human_positions,
+                    human_bboxes,
+                    head_positions,
+                    keypoint_array,
+                    detected_keypoints_objects,
+                )
+                self.frames_since_last_detection = 0
+                return self.last_valid_detection_results
+            else:  # Detection failed for this frame
+                self.frames_since_last_detection += 1
+                if (
+                    self.frames_since_last_detection <= self.grace_period_frames
+                    and self.last_valid_detection_results is not None
+                ):
+                    # Return last valid results (with empty list for current keypoint objects)
+                    return (
+                        self.last_valid_detection_results[0],
+                        self.last_valid_detection_results[1],
+                        self.last_valid_detection_results[2],
+                        self.last_valid_detection_results[3],
+                        [], # No current keypoint objects
+                    )
+                else:
+                    # Grace period expired or no previous successful detection
+                    self.last_human_positions = []
+                    self.last_human_bboxes = []
+                    self.last_head_positions = []
+                    self.last_keypoints = np.array([])
+                    self.last_valid_detection_results = None # Clear last valid results
+                    return [], [], [], np.array([]), []
         else:
-            # Return cached results
+            # Return cached results (from last_human_positions etc.)
+            # These would be from the last actual detection run (successful or grace period expired)
             return (
                 self.last_human_positions,
                 self.last_human_bboxes,
                 self.last_head_positions,
                 self.last_keypoints,
-                [],
+                [], # No current keypoint objects as detection was skipped
             )
 
     def _extract_human_data(
-        self, keypoints: list
+        self, keypoints: list # Renamed from detected_keypoints_objects for consistency within this method
     ) -> tuple[
         list[tuple[float, float]],
         list[tuple[float, float, float, float]],
@@ -122,6 +155,11 @@ class PoseDetector:
         positions = []
         bboxes = []
         heads = []
+        # Keep track of which heads contributed to a 'person' already
+        # to avoid double counting in the second pass.
+        # This assumes head_pos (nose_pos) is unique enough.
+        head_associated_with_person = set()
+
 
         try:
             # Reduced debug output
@@ -195,7 +233,7 @@ class PoseDetector:
                             )
                             if x > 0 and y > 0:
                                 all_points.append([x, y])
-                                if idx == 1:  # nose keypoint for head tracking
+                                if idx == 0:  # Corrected from idx == 1 for nose keypoint in YoloV7Pose
                                     if self.debug:
                                         print(
                                             f"   👃 Nose keypoint: x={x:.1f}, y={y:.1f}, conf={conf:.3f}"
@@ -209,9 +247,8 @@ class PoseDetector:
                                             print(
                                                 f"   ❌ Nose rejected (confidence {conf:.3f} <= 0.3)"
                                             )
-                                if idx in [0, 5, 6, 11, 12] and conf > 0.3:
+                                if idx in [0, 5, 6, 11, 12] and conf > 0.3: # nose, shoulders, hips
                                     valid_points.append([x, y])
-
                 # Approach 3: If nothing matched, show debug info
                 else:
                     if self.debug:
@@ -232,8 +269,9 @@ class PoseDetector:
                     # Add head position if nose was detected
                     if nose_pos:
                         heads.append(nose_pos)
+                        head_associated_with_person.add(nose_pos) # Mark this head as associated
                         if self.debug:
-                            print(f"👃 Head detected at: {nose_pos}")
+                            print(f"👃 Head detected at: {nose_pos} and associated with a person.")
                     else:
                         if self.debug:
                             print("❌ No nose detected for this person")
@@ -264,13 +302,39 @@ class PoseDetector:
                                 default_size,
                             )
                         )
-
         except Exception as e:
             # if int(time.time() * 2) % 20 == 0:  # Log errors every 10 seconds max
             print(f"Error processing keypoints: {e}")
 
+        # Ensure human position from unassociated heads
+        default_head_bbox_width = 50  # Example default size
+        default_head_bbox_height = 50 # Example default size
+        min_distance_sq_threshold = (30 * 30) # Example: 30 pixels squared distance threshold for "closeness"
+
+        for head_pos in heads:
+            if head_pos not in head_associated_with_person:
+                is_close_to_existing_human = False
+                for human_pos in positions:
+                    dist_sq = (head_pos[0] - human_pos[0])**2 + (head_pos[1] - human_pos[1])**2
+                    if dist_sq < min_distance_sq_threshold:
+                        is_close_to_existing_human = True
+                        break
+                
+                if not is_close_to_existing_human:
+                    if self.debug:
+                        print(f"👤 Adding human position from unassociated head at {head_pos}")
+                    positions.append(head_pos)
+                    # Add a default bounding box for this head-derived human
+                    bboxes.append((
+                        head_pos[0] - default_head_bbox_width / 2,
+                        head_pos[1] - default_head_bbox_height / 2,
+                        default_head_bbox_width,
+                        default_head_bbox_height
+                    ))
+
+
         if self.debug:
             print(
-                f"🔍 Final detection results: {len(positions)} humans, {len(heads)} heads"
+                f"🔍 Final detection results (after head check): {len(positions)} humans, {len(heads)} heads"
             )
         return positions, bboxes, heads

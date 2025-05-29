@@ -49,6 +49,7 @@ class Beetle:
 
         # Debug flag
         self.debug: bool = debug
+        self.emerge_cooldown_duration: float = 1.0  # Seconds to wait before emerging
 
     def get_bounding_box(self) -> tuple[float, float, float, float]:
         """Get beetle's bounding box (x, y, width, height)"""
@@ -108,25 +109,32 @@ class Beetle:
 
     def update_roaming(self, other_beetles: list["Beetle"] | None = None) -> None:
         """Update beetle position when roaming (no humans detected)"""
+        current_time = time.time()
+
         # Check if beetle should emerge from hiding (no humans around)
         if self.is_hidden:
-            self.is_hidden = False
-            if self.debug:
-                print(f"🪲🏠 Beetle {self.name} EMERGING from wall (no humans)")
-            # Move slightly away from wall when emerging
-            if self.x <= 10:
-                self.x = 15
-            elif self.x >= self.frame_width - self.size - 10:
-                self.x = self.frame_width - self.size - 15
-            if self.y <= 10:
-                self.y = 15
-            elif self.y >= self.frame_height - self.size - 10:
-                self.y = self.frame_height - self.size - 15
-            # Reset fleeing state when emerging
-            self.is_fleeing = False
-            return
+            if current_time - self.hide_time >= self.emerge_cooldown_duration:
+                self.is_hidden = False
+                if self.debug:
+                    print(f"🪲🏠 Beetle {self.name} EMERGING from wall (cooldown passed)")
+                # Move slightly away from wall when emerging
+                if self.x <= 10: # Assuming wall threshold is small
+                    self.x = 15
+                elif self.x >= self.frame_width - self.size - 10:
+                    self.x = self.frame_width - self.size - 15
+                if self.y <= 10:
+                    self.y = 15
+                elif self.y >= self.frame_height - self.size - 10:
+                    self.y = self.frame_height - self.size - 15
+                # Reset fleeing state when emerging
+                self.is_fleeing = False 
+                # No early return here, allow it to roam immediately after emerging
+            else:
+                # Still in cooldown, remain hidden
+                if self.debug and int(current_time * 2) % 10 == 0: # Log periodically
+                    print(f"🪲⏳ Beetle {self.name} waiting for emerge cooldown...")
+                return # Remain hidden
 
-        current_time = time.time()
         old_x, old_y = self.x, self.y
 
         # Check for collisions with other beetles
@@ -276,101 +284,171 @@ class Beetle:
                     )
 
             # Calculate flee direction (away from human)
-            dx = self.x - nearest_human[0]
-            dy = self.y - nearest_human[1]
+            dx_human = self.x - nearest_human[0]
+            dy_human = self.y - nearest_human[1]
+            
+            current_flee_dx = dx_human
+            current_flee_dy = dy_human
 
             # If very close to human, use panic mode with random strong movement
             if min_distance < 50:  # Panic distance threshold
-                # Generate strong random movement away from human
+                if self.debug:
+                    print(
+                        f"🪲😱 Beetle {self.name} PANICKING! Distance: {min_distance:.0f}"
+                    )
                 panic_angle = (
-                    math.atan2(dy, dx)
-                    if (abs(dx) > 0.1 or abs(dy) > 0.1)
+                    math.atan2(dy_human, dx_human)
+                    if (abs(dx_human) > 0.1 or abs(dy_human) > 0.1)
                     else random.uniform(0, 2 * math.pi)
                 )
-                panic_angle += random.uniform(
-                    -math.pi / 4, math.pi / 4
-                )  # Add randomness
-                dx = math.cos(panic_angle) * 100
-                dy = math.sin(panic_angle) * 100
-                print(
-                    f"🪲😱 Beetle {self.name} PANICKING! Distance: {min_distance:.0f}"
-                )
+                panic_angle += random.uniform(-math.pi / 4, math.pi / 4)
+                current_flee_dx = math.cos(panic_angle) * 100  # Strong magnitude
+                current_flee_dy = math.sin(panic_angle) * 100
+            else:
+                # Proactive hiding: Move towards the nearest wall while fleeing
+                dist_to_left_wall = self.x
+                dist_to_right_wall = self.frame_width - self.size - self.x
+                dist_to_top_wall = self.y
+                dist_to_bottom_wall = self.frame_height - self.size - self.y
 
-            # Normalize and apply flee speed
-            length = math.sqrt(dx * dx + dy * dy)
-            if length > 0.1:  # Lower threshold to prevent division issues
-                # Check for collisions with other beetles while fleeing
-                flee_direction = math.atan2(dy, dx)
+                walls = {
+                    "left": dist_to_left_wall,
+                    "right": dist_to_right_wall,
+                    "top": dist_to_top_wall,
+                    "bottom": dist_to_bottom_wall,
+                }
+                closest_wall_name = min(walls, key=walls.get)
+                
+                target_wall_x, target_wall_y = self.x, self.y # Default to current if something goes wrong
+
+                if closest_wall_name == "left":
+                    target_wall_x = 0
+                    target_wall_y = self.y
+                elif closest_wall_name == "right":
+                    target_wall_x = self.frame_width - self.size
+                    target_wall_y = self.y
+                elif closest_wall_name == "top":
+                    target_wall_x = self.x
+                    target_wall_y = 0
+                elif closest_wall_name == "bottom":
+                    target_wall_x = self.x
+                    target_wall_y = self.frame_height - self.size
+                
+                dx_wall = target_wall_x - self.x
+                dy_wall = target_wall_y - self.y
+
+                # Normalize human flee vector (it might be large from panic mode if not careful, but panic mode skips this else block)
+                len_human = math.sqrt(dx_human**2 + dy_human**2)
+                if len_human > 0.1:
+                    dx_human_norm = dx_human / len_human
+                    dy_human_norm = dy_human / len_human
+                else: # Should not happen if nearest_human is valid and not at exact same spot
+                    dx_human_norm, dy_human_norm = 0, 1 
+
+
+                # Normalize wall direction vector
+                len_wall = math.sqrt(dx_wall**2 + dy_wall**2)
+                if len_wall > 0.1:
+                    dx_wall_norm = dx_wall / len_wall
+                    dy_wall_norm = dy_wall / len_wall
+                else: # Beetle is already at the target wall point (e.g. a corner)
+                    dx_wall_norm, dy_wall_norm = 0, 0 
+                
+                # Weighted average: 70% human, 30% wall
+                # The magnitude will be determined by flee_speed later, these are just directions
+                current_flee_dx = dx_human_norm * 0.7 + dx_wall_norm * 0.3
+                current_flee_dy = dy_human_norm * 0.7 + dy_wall_norm * 0.3
+                
+                if self.debug and int(current_time * 2) % 10 == 0 :
+                     print(f"🪲🧱 Beetle {self.name} fleeing towards {closest_wall_name} wall. Human dir: ({dx_human_norm:.2f},{dy_human_norm:.2f}), Wall dir: ({dx_wall_norm:.2f},{dy_wall_norm:.2f}) Combined: ({current_flee_dx:.2f},{current_flee_dy:.2f})")
+
+
+            # Normalize combined/panic direction and apply flee speed
+            length = math.sqrt(current_flee_dx**2 + current_flee_dy**2)
+            if length > 0.1:
+                normalized_dx = current_flee_dx / length
+                normalized_dy = current_flee_dy / length
+                
+                flee_direction = math.atan2(normalized_dy, normalized_dx)
+
                 if other_beetles:
                     for other in other_beetles:
                         if other != self and self.check_collision(other):
-                            # Adjust flee direction to avoid collision
                             avoid_dx = self.x - other.x
                             avoid_dy = self.y - other.y
-                            if abs(avoid_dx) > 1 or abs(avoid_dy) > 1:
+                            if abs(avoid_dx) > 1e-3 or abs(avoid_dy) > 1e-3: # avoid division by zero
                                 avoid_angle = math.atan2(avoid_dy, avoid_dx)
-                                # Blend flee and avoidance directions
-                                flee_direction = (flee_direction + avoid_angle) / 2
-                                print(
-                                    f"🪲↔️💨 Beetle {self.name} avoiding {other.name} while fleeing"
-                                )
-
+                                # Simple average for avoidance, could be more sophisticated
+                                flee_direction = (flee_direction + avoid_angle) / 2.0 
+                                # Recompute normalized_dx/dy from new flee_direction
+                                normalized_dx = math.cos(flee_direction)
+                                normalized_dy = math.sin(flee_direction)
+                                if self.debug:
+                                    print(
+                                        f"🪲↔️💨 Beetle {self.name} avoiding {other.name} while fleeing/hiding"
+                                    )
+                
                 # Adjust flee speed based on distance (slower when far, faster when close)
+                # Panic mode uses its own magnitude which is then normalized and scaled by speed_multiplier
                 if min_distance < 50:  # Panic mode - maximum speed
-                    speed_multiplier = 15
+                    speed_multiplier = 15 
                 else:
                     speed_multiplier = max(3, min(10, 400 / max(min_distance, 50)))
 
                 flee_speed = self.speed * speed_multiplier
-                move_x = flee_speed * math.cos(flee_direction)
-                move_y = flee_speed * math.sin(flee_direction)
+                move_x = normalized_dx * flee_speed
+                move_y = normalized_dy * flee_speed
 
                 self.x += move_x
                 self.y += move_y
 
-                # Update direction for cooldown movement
-                self.direction = flee_direction
+                self.direction = flee_direction # Update main direction for cooldown
 
-                # Only log movement periodically to reduce spam
                 if self.debug and int(current_time * 10) % 10 == 0:
                     print(
-                        f"🪲💨 Beetle {self.name} fleeing: moved ({move_x:.1f},{move_y:.1f}), distance: {min_distance:.0f}"
+                        f"🪲💨 Beetle {self.name} fleeing: moved ({move_x:.1f},{move_y:.1f}) towards ({normalized_dx:.2f}, {normalized_dy:.2f}), distance: {min_distance:.0f}"
                     )
             else:
-                # If we somehow have zero length, just move in a random direction
-                self.direction = random.uniform(0, 2 * math.pi)
-                self.x += self.speed * 10 * math.cos(self.direction)
-                self.y += self.speed * 10 * math.sin(self.direction)
-                print(f"🪲🔄 Beetle {self.name} emergency random movement!")
+                # If length is still ~0 (e.g. human & wall vectors cancelled out perfectly, or at target)
+                # Fallback: Just use the original human flee direction or random if that's also zero
+                original_flee_length = math.sqrt(dx_human**2 + dy_human**2)
+                if original_flee_length > 0.1:
+                    self.direction = math.atan2(dy_human, dx_human)
+                else:
+                    self.direction = random.uniform(0, 2 * math.pi)
+                
+                self.x += self.speed * 3 * math.cos(self.direction) # Moderate speed for fallback
+                self.y += self.speed * 3 * math.sin(self.direction)
+                if self.debug: # Ensure debug check
+                    print(f"🪲🔄 Beetle {self.name} emergency fallback movement (zero combined vector)!")
 
-            # Keep within bounds and check for wall hiding
-            old_x, old_y = self.x, self.y
-            self.x = max(0, min(self.frame_width - self.size, self.x))
-            self.y = max(0, min(self.frame_height - self.size, self.y))
+            # Keep within bounds
+            pre_clamp_x, pre_clamp_y = self.x, self.y
+            self.x = max(0.0, min(self.frame_width - self.size, self.x))
+            self.y = max(0.0, min(self.frame_height - self.size, self.y))
 
-            # If we hit a boundary while fleeing, hide in the wall
-            if (self.x != old_x or self.y != old_y) and self.is_fleeing:
-                if not self.is_hidden:
+            # If we hit a boundary (meaning self.x or self.y was clamped) while fleeing, hide in the wall
+            # The check `(self.x != pre_clamp_x or self.y != pre_clamp_y)` means it was clamped.
+            # A more direct check `is_at_wall()` can also be used.
+            if self.is_at_wall(): # Use existing is_at_wall method
+                if not self.is_hidden: # Only hide if not already hidden
                     self.is_hidden = True
-                    self.hide_time = current_time
-                    print(f"🪲🏠 Beetle {self.name} HIDING in wall!")
+                    self.hide_time = current_time # This is already correctly set
+                    if self.debug:
+                        print(f"🪲🏠 Beetle {self.name} HIDING in wall!")
+                    # Snap to exact wall edge
+                    if self.x <= 5: self.x = 0
+                    elif self.x >= self.frame_width - self.size - 5: self.x = self.frame_width - self.size
+                    if self.y <= 5: self.y = 0
+                    elif self.y >= self.frame_height - self.size - 5: self.y = self.frame_height - self.size
+            # This part for normal bouncing when not hitting walls is likely not needed if it hides at wall
+            # else if pre_clamp_x == self.x and pre_clamp_y == self.y and not self.is_hidden:
+            #    # Normal boundary bouncing when not hitting walls (if it didn't hide)
+            #    # This logic might be redundant if the goal is to hide at the wall.
+            #    pass
 
-                    # Position beetle exactly at the wall edge
-                    if self.x <= 0:
-                        self.x = 0
-                    elif self.x >= self.frame_width - self.size:
-                        self.x = self.frame_width - self.size
-                    if self.y <= 0:
-                        self.y = 0
-                    elif self.y >= self.frame_height - self.size:
-                        self.y = self.frame_height - self.size
-            elif self.x == old_x and self.y == old_y and not self.is_hidden:
-                # Normal boundary bouncing when not hitting walls
-                if self.x <= 0 or self.x >= self.frame_width - self.size:
-                    self.direction = math.pi - self.direction
-                if self.y <= 0 or self.y >= self.frame_height - self.size:
-                    self.direction = -self.direction
-        else:
+
+        else: # No human_positions or not should_flee
             # Only stop fleeing after cooldown period
             if (
                 self.is_fleeing
@@ -450,9 +528,12 @@ class HeadFollower(Beetle):
         debug: bool = False,
     ) -> None:
         super().__init__(name, image_path, frame_width, frame_height, debug)
-        self.target_head_pos: tuple[float, float] | None = None
+        # self.target_head_pos: tuple[float, float] | None = None # Replaced by last_known_head_target
         self.follow_speed: int = 15  # Faster than regular beetles
         self.is_following: bool = False
+        self.following_grace_period: float = 0.5  # seconds
+        self.time_lost_head: float | None = None
+        self.last_known_head_target: tuple[float, float] | None = None
 
         # Smaller size for head follower
         self.size = 40
@@ -467,48 +548,84 @@ class HeadFollower(Beetle):
         # Debug: Conditionally print when called
         if self.debug:
             print(f"🔍 {self.name} update_following called with {len(head_positions)} heads")
-            if head_positions:
-                print(f"   Head positions: {head_positions}")
 
-        if not head_positions:
-            # No heads detected - stop following and disappear
-            if self.is_following:
-                self.is_following = False
-                if self.debug:
-                    print(f"❌ {self.name} lost track of human head")
-            elif self.debug:
-                print(f"⏳ {self.name} still waiting for heads (not following)")
-            return
+        current_time = time.time()
 
-        # Find nearest head (or just use first one for simplicity)
-        target_head = head_positions[0]
-
-        if not self.is_following:
+        if head_positions:
+            # Head(s) detected
             self.is_following = True
+            self.time_lost_head = None # Reset lost head timer
+            
+            # Find nearest head (or just use first one for simplicity - current logic)
+            # TODO: If multiple heads, select the closest one if needed. For now, using first.
+            target_head = head_positions[0]
+            self.last_known_head_target = target_head # Update last known target
+
             if self.debug:
-                print(f"✅ {self.name} STARTING to follow human head at {target_head}!")
-        elif self.debug:
-            print(f"⬆️ {self.name} continuing to follow head")
+                print(f"✅ {self.name} actively following head at {target_head}")
+            
+            # Calculate position on top of head
+            head_x, head_y = target_head
+            target_x = head_x - self.size / 2  # Center beetle on head
+            target_y = head_y - self.size - 10  # Position above head with small offset
 
-        # Calculate position on top of head
-        head_x, head_y = target_head
-        target_x = head_x - self.size / 2  # Center beetle on head
-        target_y = head_y - self.size - 10  # Position above head with small offset
+            # Smooth movement towards target
+            dx = target_x - self.x
+            dy = target_y - self.y
+            distance = math.sqrt(dx * dx + dy * dy)
 
-        # Smooth movement towards target
-        dx = target_x - self.x
-        dy = target_y - self.y
-        distance = math.sqrt(dx * dx + dy * dy)
+            if distance > 5:  # Only move if not close enough
+                move_factor = min(1.0, self.follow_speed / distance if distance > 0 else 0) # Avoid div by zero if distance is tiny
+                self.x += dx * move_factor
+                self.y += dy * move_factor
 
-        if distance > 5:  # Only move if not close enough
-            # Move towards target with smooth interpolation
-            move_factor = min(1.0, self.follow_speed / distance)
-            self.x += dx * move_factor
-            self.y += dy * move_factor
+                self.x = max(0, min(self.frame_width - self.size, self.x))
+                self.y = max(0, min(self.frame_height - self.size, self.y))
 
-            # Keep within frame bounds
-            self.x = max(0, min(self.frame_width - self.size, self.x))
-            self.y = max(0, min(self.frame_height - self.size, self.y))
+        else:
+            # No heads currently detected
+            if self.is_following: # Was following, now head is lost
+                if self.time_lost_head is None:
+                    self.time_lost_head = current_time
+                    if self.debug:
+                        print(f"❓ {self.name} lost head, starting grace period. Last known: {self.last_known_head_target}")
+
+                if (current_time - self.time_lost_head) < self.following_grace_period:
+                    # Still within grace period
+                    if self.last_known_head_target:
+                        if self.debug:
+                            print(f"⏳ {self.name} in grace period, moving to last known head pos: {self.last_known_head_target}")
+                        # Continue moving to last known target
+                        head_x, head_y = self.last_known_head_target
+                        target_x = head_x - self.size / 2
+                        target_y = head_y - self.size - 10
+
+                        dx = target_x - self.x
+                        dy = target_y - self.y
+                        distance = math.sqrt(dx * dx + dy * dy)
+
+                        if distance > 5:
+                            move_factor = min(1.0, self.follow_speed / distance if distance > 0 else 0)
+                            self.x += dx * move_factor
+                            self.y += dy * move_factor
+                            self.x = max(0, min(self.frame_width - self.size, self.x))
+                            self.y = max(0, min(self.frame_height - self.size, self.y))
+                    else:
+                        # No last known target, so stop (should not happen if logic is correct)
+                        self.is_following = False
+                        if self.debug:
+                             print(f"🛑 {self.name} in grace period BUT no last_known_head_target. Stopping.")
+                else:
+                    # Grace period expired
+                    self.is_following = False
+                    self.time_lost_head = None
+                    self.last_known_head_target = None
+                    if self.debug:
+                        print(f"❌ {self.name} grace period expired. Stopped following.")
+            else:
+                # Not following and no heads detected, do nothing.
+                if self.debug and int(current_time * 2) % 20 == 0: # Log periodically
+                    print(f"😴 {self.name} idle, no heads detected.")
 
     def update_roaming(self, other_beetles: list["Beetle"] | None = None) -> None:
         """Head followers don't roam - they only follow or stay hidden"""

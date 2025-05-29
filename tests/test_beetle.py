@@ -474,6 +474,172 @@ class TestHeadFollower:
         head_follower.draw(frame)
         # Frame should be modified (we don't check exact content due to image complexity)
 
+    # New tests for Beetle class
+    @patch('time.time')
+    def test_beetle_stays_hidden_during_emerge_cooldown(self, mock_time, beetle: Beetle):
+        mock_time.return_value = 100.0 # Current time
+        beetle.is_hidden = True
+        beetle.hide_time = mock_time.return_value # Just hid
+        beetle.emerge_cooldown_duration = 1.0
+
+        beetle.update_roaming([])
+        assert beetle.is_hidden is True, "Beetle should remain hidden during cooldown"
+
+    @patch('time.time')
+    def test_beetle_emerges_after_emerge_cooldown(self, mock_time, beetle: Beetle):
+        beetle.emerge_cooldown_duration = 1.0
+        mock_time.return_value = 100.0 # Current time
+        
+        beetle.is_hidden = True
+        # Set hide_time such that cooldown has passed
+        beetle.hide_time = mock_time.return_value - beetle.emerge_cooldown_duration - 0.1 
+
+        beetle.update_roaming([])
+        assert beetle.is_hidden is False, "Beetle should emerge after cooldown"
+
+    def test_beetle_fleeing_incorporates_wall_direction(self, beetle: Beetle):
+        # Position beetle centrally, human slightly below
+        beetle.x = 300.0
+        beetle.y = 200.0 
+        beetle.is_hidden = False
+        beetle.is_fleeing = False # Start not fleeing
+        initial_direction = beetle.direction # Store initial direction for comparison
+
+        # Human is at (300, 220), slightly below the beetle.
+        # Beetle should move primarily upwards (y decreases) away from human.
+        # Nearest wall for y=200 is top wall (y=0). So wall direction dy is also negative.
+        # Combined dy should be strongly negative. dx should be minimal.
+        human_positions = [(300.0, 220.0)]
+        # Bbox needs to be set for flee logic to trigger based on distance to bbox edge
+        # A bbox that makes the human "close" to trigger fleeing.
+        # flee_trigger_distance is 100 if not self.is_fleeing
+        # Beetle center (340,240), human center (300,220)
+        # dist will be < 100
+        human_bboxes = [(280.0, 200.0, 40.0, 40.0)] 
+
+
+        beetle.update_fleeing(human_positions, human_bboxes=human_bboxes)
+
+        assert beetle.is_fleeing is True, "Beetle should be fleeing"
+        
+        # Check the direction:
+        # dx_human = 300 - 300 = 0
+        # dy_human = 200 - 220 = -20
+        # Human flee direction is atan2(-20, 0) = -pi/2 (straight up)
+
+        # Wall direction:
+        # dist_to_left_wall = 300
+        # dist_to_right_wall = 640 - 80 - 300 = 260
+        # dist_to_top_wall = 200
+        # dist_to_bottom_wall = 480 - 80 - 200 = 200
+        # Closest wall could be top or bottom. If top: target_wall_y=0, dy_wall = 0-200 = -200
+        # If bottom: target_wall_y=480-80=400, dy_wall = 400-200 = 200
+        # The code picks min(walls, key=walls.get), so top wall (y=0) is chosen.
+        # dx_wall = 300 - 300 = 0 (target_wall_x = self.x)
+        # dy_wall = 0 - 200 = -200
+        # Wall direction is also atan2(-200, 0) = -pi/2 (straight up)
+
+        # Both primary human flee and wall direction are straight up (-pi/2).
+        # So, the combined direction should also be straight up.
+        expected_direction = -math.pi / 2
+        assert abs(beetle.direction - expected_direction) < 0.1, \
+            f"Beetle direction {beetle.direction} not close to {expected_direction}"
+
+        # Test with human above, beetle should flee down and towards bottom wall
+        beetle.x = 300.0
+        beetle.y = 200.0
+        beetle.is_fleeing = False # Reset
+        human_positions = [(300.0, 180.0)] # Human above
+        human_bboxes = [(280.0, 160.0, 40.0, 40.0)]
+        beetle.update_fleeing(human_positions, human_bboxes=human_bboxes)
+        # dx_human = 0, dy_human = 200-180 = 20. Flee direction pi/2 (down)
+        # Closest wall is bottom (y=400). dy_wall = 400-200 = 200. Wall direction pi/2 (down)
+        expected_direction_down = math.pi / 2
+        assert abs(beetle.direction - expected_direction_down) < 0.1, \
+            f"Beetle direction {beetle.direction} not close to {expected_direction_down}"
+
+
+    # New tests for HeadFollower class
+    @patch('time.time')
+    def test_headfollower_stays_following_during_grace_period(self, mock_time, head_follower: HeadFollower):
+        initial_x, initial_y = head_follower.x, head_follower.y
+        
+        # Frame 1: Detect head, start following
+        mock_time.return_value = 100.0
+        head_follower.update_following([(100.0, 100.0)])
+        assert head_follower.is_following is True
+        assert head_follower.last_known_head_target == (100.0, 100.0)
+        # Check it moved from initial position
+        assert head_follower.x != initial_x or head_follower.y != initial_y
+
+        # Frame 2: Head lost, grace period starts
+        time_head_lost_simulation = 100.1
+        mock_time.return_value = time_head_lost_simulation
+        
+        # Store position before this update to check movement towards last known
+        x_before_grace_update = head_follower.x
+        y_before_grace_update = head_follower.y
+
+        head_follower.update_following([]) 
+        assert head_follower.is_following is True, "Should still be following during grace period"
+        assert head_follower.time_lost_head == time_head_lost_simulation, "time_lost_head should be set"
+        
+        # Check it's still moving towards (100,100)
+        # Target for beetle center on head: (100 - size/2, 100 - size - 10)
+        # size = 40. target_display_x = 100 - 20 = 80. target_display_y = 100 - 40 - 10 = 50.
+        target_calc_x = 100.0 - head_follower.size / 2
+        target_calc_y = 100.0 - head_follower.size - 10
+
+        dist_before_sq = (x_before_grace_update - target_calc_x)**2 + (y_before_grace_update - target_calc_y)**2
+        dist_after_sq = (head_follower.x - target_calc_x)**2 + (head_follower.y - target_calc_y)**2
+        
+        # If not already at target, it should have moved closer or stayed if at target
+        if dist_before_sq > 1: # Avoid floating point issues if already at target
+             assert dist_after_sq < dist_before_sq, "Should move closer to last known target during grace"
+
+
+    @patch('time.time')
+    def test_headfollower_stops_following_after_grace_period(self, mock_time, head_follower: HeadFollower):
+        # Frame 1: Detect head
+        mock_time.return_value = 100.0
+        head_follower.update_following([(100.0, 100.0)])
+        assert head_follower.is_following is True
+
+        # Frame 2: Head lost, grace period starts
+        mock_time.return_value = 100.1
+        head_follower.update_following([])
+        assert head_follower.is_following is True 
+        assert head_follower.time_lost_head == 100.1
+
+        # Frame 3: Time moves beyond grace period
+        # following_grace_period is 0.5s by default
+        mock_time.return_value = 100.1 + head_follower.following_grace_period + 0.1 
+        head_follower.update_following([])
+        assert head_follower.is_following is False, "Should stop following after grace period"
+        assert head_follower.time_lost_head is None
+        assert head_follower.last_known_head_target is None
+
+    @patch('time.time')
+    def test_headfollower_resumes_following_if_head_reappears(self, mock_time, head_follower: HeadFollower):
+        # Frame 1: Detect head
+        mock_time.return_value = 100.0
+        head_follower.update_following([(100.0, 100.0)])
+        assert head_follower.is_following is True
+        assert head_follower.last_known_head_target == (100.0, 100.0)
+
+        # Frame 2: Head lost (start of grace period)
+        mock_time.return_value = 100.1
+        head_follower.update_following([])
+        assert head_follower.is_following is True # Still in grace
+        assert head_follower.time_lost_head == 100.1
+
+        # Frame 3: Head reappears at a new spot
+        mock_time.return_value = 100.2 
+        head_follower.update_following([(200.0, 200.0)])
+        assert head_follower.is_following is True, "Should resume following"
+        assert head_follower.last_known_head_target == (200.0, 200.0), "Should target new head position"
+        assert head_follower.time_lost_head is None, "time_lost_head should be reset"
+
 
 class TestBeetleBehaviorFunctions:
     """Test functions that coordinate beetle behavior"""
@@ -494,8 +660,8 @@ class TestBeetleBehaviorFunctions:
 
     def test_multiple_beetles_collision_avoidance(self, mock_beetle_image: str) -> None:
         """Test that multiple beetles avoid colliding with each other"""
-        beetle1 = Beetle("beetle1", mock_beetle_image, 640, 480)
-        beetle2 = Beetle("beetle2", mock_beetle_image, 640, 480)
+        beetle1 = Beetle("beetle1", mock_beetle_image, 640, 480, debug=False)
+        beetle2 = Beetle("beetle2", mock_beetle_image, 640, 480, debug=False)
 
         # Position beetles to potentially collide
         beetle1.x = 100.0
@@ -510,25 +676,39 @@ class TestBeetleBehaviorFunctions:
 
         # Test that beetles have moved (integration test)
         # Note: This test validates the system works without being too specific about internal behavior
+        # A more specific assertion would be that their distance increased or directions changed.
+        dist_after = math.sqrt((beetle1.x - beetle2.x)**2 + (beetle1.y - beetle2.y)**2)
+        assert dist_after > 0 # Check they are not in the exact same spot (which avoid_collision tries to prevent)
+
 
     def test_fleeing_beetle_collision_avoidance(self, mock_beetle_image: str) -> None:
         """Test beetles avoid each other while fleeing"""
-        beetle1 = Beetle("beetle1", mock_beetle_image, 640, 480)
-        beetle2 = Beetle("beetle2", mock_beetle_image, 640, 480)
+        beetle1 = Beetle("beetle1", mock_beetle_image, 640, 480, debug=False)
+        beetle2 = Beetle("beetle2", mock_beetle_image, 640, 480, debug=False)
 
         # Position beetles close together
         beetle1.x = 200.0
         beetle1.y = 200.0
-        beetle2.x = 210.0
+        beetle2.x = 210.0 # Close, but not overlapping for initial state
         beetle2.y = 210.0
 
         # Add human to trigger fleeing
-        human_positions = [(300.0, 300.0)]
+        human_positions = [(300.0, 300.0)] # Human to the bottom-right
+        human_bboxes = [(280.0, 280.0, 40.0, 40.0)]
         beetles = [beetle1, beetle2]
 
         # Both beetles should flee while avoiding each other
-        beetle1.update_fleeing(human_positions, other_beetles=beetles)
-        beetle2.update_fleeing(human_positions, other_beetles=beetles)
+        beetle1.update_fleeing(human_positions, human_bboxes=human_bboxes, other_beetles=beetles)
+        beetle2.update_fleeing(human_positions, human_bboxes=human_bboxes, other_beetles=beetles)
 
         # Both should be fleeing
-        assert beetle1.is_fleeing or beetle2.is_fleeing  # At least one should flee
+        assert beetle1.is_fleeing, "Beetle1 should be fleeing"
+        assert beetle2.is_fleeing, "Beetle2 should be fleeing"
+        
+        # Check they moved away from human and potentially each other
+        # Beetle1 should move towards top-left, Beetle2 also towards top-left
+        # Their relative positions might not change much if their flee paths are parallel
+        # but the key is that the collision avoidance logic was called.
+        # This test mostly ensures the fleeing logic runs with other_beetles.
+        assert beetle1.x < 200.0 or beetle1.y < 200.0 # Moved from initial
+        assert beetle2.x < 210.0 or beetle2.y < 210.0 # Moved from initial

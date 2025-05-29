@@ -374,3 +374,168 @@ class TestPoseDetectorLogging:
         
         # Should log the number of keypoints detected
         mock_print.assert_called_with("Number of keypoints detected: 1")
+
+    # New tests for grace period and head detection logic
+    @patch('hemzeni.pose_detector.YoloV7Pose')
+    @patch('cv2.resize') # Mock resize as it's called in detect
+    def test_grace_period_logic(self, mock_resize, mock_yolo_class):
+        """Test the grace period logic for detections."""
+        mock_model_instance = MagicMock()
+        mock_yolo_class.return_value = mock_model_instance
+        mock_resize.return_value = np.zeros((96, 128, 3), dtype=np.uint8) # Dummy small frame
+
+        detector = PoseDetector(detection_interval=1, grace_period_frames=2)
+        # Set a distinct detection_scale to test if it's preserved in cached results
+        detector.detection_scale = 0.5 
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        # Mock keypoint object structure
+        # raw_keypoint should be shape (N, 3) for Approach 1 in _extract_human_data
+        # For simplicity, using a single keypoint that defines a person
+        kp_data1 = np.array([[20, 20, 0.9], [0,0,0], [0,0,0], [0,0,0], [0,0,0], [22,22,0.8]]) # simplified for position calculation
+        mock_kp_obj1 = MagicMock()
+        mock_kp_obj1.raw_keypoint = kp_data1
+        
+        kp_data2 = np.array([[40, 40, 0.9], [0,0,0], [0,0,0], [0,0,0], [0,0,0], [42,42,0.8]])
+        mock_kp_obj2 = MagicMock()
+        mock_kp_obj2.raw_keypoint = kp_data2
+
+
+        # Frame 1: Valid detection
+        mock_model_instance.return_value = [mock_kp_obj1]
+        hp1, bb1, hdp1, kp_arr1, raw_kp1 = detector.detect(frame)
+        
+        assert len(hp1) > 0, "Frame 1 should have human positions"
+        # raw_kp1 is a list of YoloV7Pose objects, check its content
+        assert len(raw_kp1) == 1 and raw_kp1[0] == mock_kp_obj1, "Frame 1 should return raw keypoints"
+        assert detector.frames_since_last_detection == 0
+        assert detector.last_valid_detection_results is not None
+        # Check that the scaled keypoints are stored in last_valid_detection_results
+        # Example: first point x: 20 / 0.5 = 40
+        assert detector.last_valid_detection_results[3][0,0,0] == 20 / 0.5
+
+
+        # Frame 2: No detection (grace period active)
+        mock_model_instance.return_value = [] # No keypoints detected
+        hp2, bb2, hdp2, kp_arr2, raw_kp2 = detector.detect(frame)
+
+        assert hp2 == hp1, "Frame 2 should return cached human positions from Frame 1"
+        assert bb2 == bb1, "Frame 2 should return cached bboxes from Frame 1"
+        assert hdp2 == hdp1, "Frame 2 should return cached head positions from Frame 1"
+        np.testing.assert_array_equal(kp_arr2, kp_arr1, err_msg="Frame 2 should return cached keypoint array from Frame 1")
+        assert raw_kp2 == [], "Frame 2 should return empty list for current raw keypoints"
+        assert detector.frames_since_last_detection == 1
+        
+        # Frame 3: No detection (grace period active, last frame of grace)
+        mock_model_instance.return_value = []
+        hp3, bb3, hdp3, kp_arr3, raw_kp3 = detector.detect(frame)
+
+        assert hp3 == hp1, "Frame 3 should return cached human positions from Frame 1"
+        assert bb3 == bb1, "Frame 3 should return cached bboxes from Frame 1"
+        assert hdp3 == hdp1, "Frame 3 should return cached head positions from Frame 1"
+        np.testing.assert_array_equal(kp_arr3, kp_arr1, err_msg="Frame 3 should return cached keypoint array from Frame 1")
+        assert raw_kp3 == [], "Frame 3 should return empty list for current raw keypoints"
+        assert detector.frames_since_last_detection == 2
+
+        # Frame 4: No detection (grace period expired)
+        mock_model_instance.return_value = []
+        hp4, bb4, hdp4, kp_arr4, raw_kp4 = detector.detect(frame)
+        
+        assert hp4 == [], "Frame 4 should return empty human positions"
+        assert bb4 == [], "Frame 4 should return empty bboxes"
+        assert hdp4 == [], "Frame 4 should return empty head positions"
+        assert kp_arr4.size == 0, "Frame 4 should return empty keypoint array"
+        assert raw_kp4 == [], "Frame 4 should return empty list for current raw keypoints"
+        assert detector.frames_since_last_detection == 3 # Incremented beyond grace_period_frames
+        assert detector.last_valid_detection_results is None # Should be cleared
+
+        # Frame 5: New valid detection
+        mock_model_instance.return_value = [mock_kp_obj2]
+        hp5, bb5, hdp5, kp_arr5, raw_kp5 = detector.detect(frame)
+
+        assert len(hp5) > 0, "Frame 5 should have new human positions"
+        assert hp5 != hp1, "Frame 5 positions should be different from Frame 1"
+        assert len(raw_kp5) == 1 and raw_kp5[0] == mock_kp_obj2, "Frame 5 should return new raw keypoints"
+        assert detector.frames_since_last_detection == 0
+        assert detector.last_valid_detection_results is not None
+        assert detector.last_valid_detection_results[0] == hp5 
+        # Check scaled keypoint from new detection
+        assert detector.last_valid_detection_results[3][0,0,0] == 40 / 0.5
+
+
+    def test_head_detection_ensures_human_position(self):
+        """Test that a detected head (even if alone) results in a human position and bbox."""
+        detector = PoseDetector(detection_scale=1.0, debug=False) # Use scale 1.0 for simplicity
+
+        mock_kp_obj_head_only = MagicMock()
+        keypoints_data_head_only = np.zeros((17, 3)) 
+        keypoints_data_head_only[0] = [150, 160, 0.9] # Nose (idx 0 for YoloV7Pose)
+        mock_kp_obj_head_only.raw_keypoint = keypoints_data_head_only
+        
+        # Call _extract_human_data directly as it contains the core logic
+        # This method expects a list of keypoint objects from the model
+        positions, bboxes, heads = detector._extract_human_data([mock_kp_obj_head_only])
+
+        assert len(heads) == 1, "Should detect one head"
+        assert heads[0] == (150, 160), "Head position should match nose keypoint"
+        
+        assert len(positions) == 1, "Should create one human position from the detected head"
+        # The position calculation for a single nose point will be just the nose point itself
+        # if only nose is in valid_points.
+        # valid_points includes idx 0 (nose) if conf > 0.3
+        # center_x = sum(p[0] for p in valid_points) / len(valid_points) -> 150/1 = 150
+        assert positions[0] == (150, 160), "Human position should be based on the head's position"
+        
+        assert len(bboxes) == 1, "Should create one bounding box for the head-derived human"
+        # Check default bbox around the head. From code: default_head_bbox_width = 50
+        expected_bbox_x = 150 - 50 / 2
+        expected_bbox_y = 160 - 50 / 2
+        assert bboxes[0] == (expected_bbox_x, expected_bbox_y, 50, 50), "Bounding box should be the default for a head"
+
+        # Scenario 2: Full person detected, and a separate head far away
+        mock_person_kp_obj = MagicMock()
+        person_kp_data = np.zeros((17,3))
+        person_kp_data[0] = [100,100,0.9] # Nose
+        person_kp_data[5] = [90,120,0.8]  # L Shoulder
+        person_kp_data[6] = [110,120,0.8] # R Shoulder
+        person_kp_data[11] = [95,150,0.8] # L Hip
+        person_kp_data[12] = [105,150,0.8]# R Hip
+        mock_person_kp_obj.raw_keypoint = person_kp_data
+        # Expected center for person1: nose, shoulders, hips
+        # x_coords = [100, 90, 110, 95, 105] -> sum = 500, avg = 100
+        # y_coords = [100, 120, 120, 150, 150] -> sum = 640, avg = 128
+        # Person1 center approx (100, 128)
+
+        mock_far_head_kp_obj = MagicMock()
+        far_head_kp_data = np.zeros((17,3))
+        far_head_kp_data[0] = [300,300,0.9] # Far Nose
+        mock_far_head_kp_obj.raw_keypoint = far_head_kp_data
+        
+        positions, bboxes, heads = detector._extract_human_data([mock_person_kp_obj, mock_far_head_kp_obj])
+        
+        assert len(heads) == 2 # Both noses detected
+        assert len(positions) == 2 # Person + far head
+        assert len(bboxes) == 2
+
+        found_far_head_person = any(pos == (300,300) for pos in positions)
+        assert found_far_head_person, "Far head should be added as a distinct human position"
+        
+        # Scenario 3: Full person detected, and another head detection close to this person
+        # This "other head" should NOT create a new person due to proximity.
+        mock_close_head_only_kp_obj = MagicMock()
+        close_head_only_kp_data = np.zeros((17,3))
+        # Person1 center approx (100, 128). min_distance_sq_threshold = 30*30 = 900
+        # A head at (110, 130) would be: dx=10, dy=2. dist_sq = 100+4 = 104 < 900. So, too close.
+        close_head_only_kp_data[0] = [110, 130, 0.9] 
+        mock_close_head_only_kp_obj.raw_keypoint = close_head_only_kp_data
+
+        positions, bboxes, heads = detector._extract_human_data([mock_person_kp_obj, mock_close_head_only_kp_obj])
+
+        assert len(heads) == 2 # Nose from person1, and the new close head detection
+        assert len(positions) == 1 # Should only be one person, as the second head is too close
+        assert len(bboxes) == 1
+        
+        # Verify the single position is from mock_person_kp_obj (approx (100,128))
+        main_person_pos = positions[0]
+        assert abs(main_person_pos[0] - 100) < 1e-6 
+        assert abs(main_person_pos[1] - 128) < 1e-6
