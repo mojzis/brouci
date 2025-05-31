@@ -52,7 +52,7 @@ class BeetleController:
         try:
             kudlanka_path = os.path.join("img", "kudlanka.png")
             blecha_path = os.path.join("img", "blecha.png")
-            lachticek_path = os.path.join("img", "lachticek.png")
+            lachticek_path = os.path.join("img", "kolecko.png")
 
             self.beetles = [
                 Beetle(
@@ -189,28 +189,10 @@ class BeetleController:
         raw_keypoints: list,
         frame: NDArray[np.uint8],
     ) -> None:
-        """Update session state with detection results (Streamlit compatibility)"""
-        # This method is for Streamlit compatibility only
-        # When used with Flask, this does nothing
-        try:
-            import streamlit as st
-
-            if "pred_list" not in st.session_state:
-                st.session_state.pred_list = []
-
-            if len(keypoint_array) > 0:
-                st.session_state.pred_list.append(keypoint_array)
-
-            try:
-                if len(raw_keypoints) > 0:
-                    st.session_state.hand = raw_keypoints[0].get_keypoint(9)
-            except (IndexError, AttributeError):
-                pass
-
-            st.session_state.img = frame
-        except ImportError:
-            # Streamlit not available - skip session state updates
-            pass
+        """Legacy method for compatibility - no longer used"""
+        # This method was for Streamlit compatibility
+        # Now that we use Flask, this method does nothing
+        pass
 
     def get_status_message(
         self, human_positions: list[tuple[float, float]]

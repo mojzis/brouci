@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Beetle Replay Debugger</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .main-content {
+            display: flex;
+            gap: 20px;
+        }
+        .video-section {
+            flex: 2;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .debug-section {
+            flex: 1;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .frame-display {
+            width: 100%;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            opacity: 0.8;
+        }
+        button.active {
+            background-color: #f44336;
+        }
+        .slider-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        input[type="range"] {
+            width: 80%;
+            margin: 10px 0;
+        }
+        .settings {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+        }
+        .settings label {
+            display: inline-block;
+            margin: 5px 10px;
+        }
+        .debug-info {
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .debug-info h3 {
+            margin-top: 0;
+            color: #4CAF50;
+        }
+        .beetle-info {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+        }
+        .pose-info {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #e8f5e9;
+            border-radius: 4px;
+        }
+        .frame-info {
+            text-align: center;
+            font-size: 18px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Beetle Replay Debugger</h1>
+        
+        <div class="main-content">
+            <div class="video-section">
+                <img id="frameDisplay" class="frame-display" src="">
+                
+                <div class="frame-info">
+                    Frame: <span id="currentFrame">0</span> / <span id="totalFrames">{{ total_frames - 1 }}</span>
+                </div>
+                
+                <div class="slider-container">
+                    <input type="range" id="frameSlider" min="0" max="{{ total_frames - 1 }}" value="0">
+                </div>
+                
+                <div class="controls">
+                    <button id="playBtn" onclick="togglePlay()">Play</button>
+                    <button onclick="resetController()">Reset Controller</button>
+                    <button onclick="previousFrame()">Previous</button>
+                    <button onclick="nextFrame()">Next</button>
+                </div>
+                
+                <div class="settings">
+                    <h3>Settings</h3>
+                    <label>
+                        <input type="checkbox" id="showBeetles" checked onchange="updateFrame()"> Show Beetles
+                    </label>
+                    <label>
+                        <input type="checkbox" id="showPose" checked onchange="updateFrame()"> Show Pose
+                    </label>
+                    <label>
+                        FPS: <input type="number" id="fpsInput" value="10" min="1" max="30" style="width: 50px;">
+                    </label>
+                </div>
+            </div>
+            
+            <div class="debug-section">
+                <div class="debug-info" id="debugInfo">
+                    <h3>Debug Information</h3>
+                    <p>Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentFrame = 0;
+        let totalFrames = {{ total_frames }};
+        let playing = false;
+        let playInterval = null;
+        
+        const frameSlider = document.getElementById('frameSlider');
+        const frameDisplay = document.getElementById('frameDisplay');
+        const currentFrameSpan = document.getElementById('currentFrame');
+        const debugInfo = document.getElementById('debugInfo');
+        
+        // Initialize
+        updateFrame();
+        
+        frameSlider.addEventListener('input', function() {
+            currentFrame = parseInt(this.value);
+            updateFrame();
+        });
+        
+        function updateFrame() {
+            const showBeetles = document.getElementById('showBeetles').checked;
+            const showPose = document.getElementById('showPose').checked;
+            
+            fetch(`/frame/${currentFrame}?show_beetles=${showBeetles}&show_pose=${showPose}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error(data.error);
+                        return;
+                    }
+                    
+                    // Update frame display
+                    frameDisplay.src = 'data:image/jpeg;base64,' + data.frame;
+                    currentFrameSpan.textContent = currentFrame;
+                    frameSlider.value = currentFrame;
+                    
+                    // Update debug info
+                    updateDebugInfo(data.debug_info);
+                });
+        }
+        
+        function updateDebugInfo(info) {
+            let html = '<h3>Debug Information</h3>';
+            html += `<p><strong>Frame:</strong> ${info.frame_index} / ${info.total_frames - 1}</p>`;
+            html += `<p><strong>Poses detected:</strong> ${info.poses_count}</p>`;
+            
+            if (info.beetles && info.beetles.length > 0) {
+                html += '<h4>Beetles</h4>';
+                info.beetles.forEach(beetle => {
+                    html += `<div class="beetle-info">`;
+                    html += `<strong>${beetle.name}</strong><br>`;
+                    html += `Position: (${beetle.x}, ${beetle.y})<br>`;
+                    html += `State: ${beetle.state}<br>`;
+                    html += `Speed: ${beetle.speed}<br>`;
+                    html += `Direction: ${beetle.direction}`;
+                    html += `</div>`;
+                });
+            }
+            
+            if (info.poses && info.poses.length > 0) {
+                html += '<h4>Detected Poses</h4>';
+                info.poses.forEach(pose => {
+                    html += `<div class="pose-info">`;
+                    html += `Pose ${pose.id}: ${pose.keypoints_count} keypoints`;
+                    html += `</div>`;
+                });
+            }
+            
+            debugInfo.innerHTML = html;
+        }
+        
+        function togglePlay() {
+            playing = !playing;
+            const playBtn = document.getElementById('playBtn');
+            
+            if (playing) {
+                playBtn.textContent = 'Pause';
+                playBtn.classList.add('active');
+                const fps = parseInt(document.getElementById('fpsInput').value);
+                playInterval = setInterval(() => {
+                    if (currentFrame < totalFrames - 1) {
+                        currentFrame++;
+                        updateFrame();
+                    } else {
+                        togglePlay(); // Stop at end
+                    }
+                }, 1000 / fps);
+            } else {
+                playBtn.textContent = 'Play';
+                playBtn.classList.remove('active');
+                if (playInterval) {
+                    clearInterval(playInterval);
+                    playInterval = null;
+                }
+            }
+        }
+        
+        function previousFrame() {
+            if (currentFrame > 0) {
+                currentFrame--;
+                updateFrame();
+            }
+        }
+        
+        function nextFrame() {
+            if (currentFrame < totalFrames - 1) {
+                currentFrame++;
+                updateFrame();
+            }
+        }
+        
+        function resetController() {
+            fetch('/reset', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Controller reset');
+                    updateFrame();
+                });
+        }
+    </script>
+</body>
+</html>

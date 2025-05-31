@@ -13,8 +13,10 @@ Hemzeni is a real-time pose detection application that provides live webcam feed
 1. **AIpose with YoloV7** (`hemzeni/app.py`) - Uses the aipose library with YoloV7 model for pose detection
 2. **MediaPipe** (`hemzeni/app_mediapipe.py`) - Uses Google's MediaPipe for pose landmark detection  
 3. **Beetles Interactive** (`hemzeni/app_beetles.py`) - AIpose-based app with interactive beetle creatures that roam when no humans are detected and flee when humans appear
+4. **Frame Capture** (`hemzeni/app_frame_capture.py`) - Flask app for capturing video frames to disk for debugging
+5. **Beetle Replay** (`hemzeni/app_beetles_replay.py`) - Flask app for replaying saved frames with beetle behavior
 
-All applications are built with Streamlit for the web interface and OpenCV for camera handling.
+All applications are built with Flask for the web interface and OpenCV for camera handling.
 
 ## Development Commands
 
@@ -30,13 +32,19 @@ poetry shell
 ### Running Applications
 ```bash
 # Run the AIpose-based pose detection app
-streamlit run hemzeni/app.py
+python hemzeni/app.py
 
 # Run the MediaPipe-based pose detection app  
-streamlit run hemzeni/app_mediapipe.py
+python hemzeni/app_mediapipe.py
 
 # Run the interactive beetles app
-streamlit run hemzeni/app_beetles.py
+python hemzeni/app_beetles.py
+
+# Run the frame capture tool (port 5001)
+python hemzeni/app_frame_capture.py
+
+# Run the beetle replay debugger (port 5002)
+python hemzeni/app_beetles_replay.py
 ```
 
 ### Code Quality
@@ -51,15 +59,17 @@ ruff format .
 ## Architecture Notes
 
 ### Core Components
-- **Camera Input**: Both apps use OpenCV's VideoCapture for webcam access
+- **Camera Input**: All apps use OpenCV's VideoCapture for webcam access
 - **Pose Detection**: Two different backends provide pose landmark detection
 - **Visualization**: Real-time rendering of pose landmarks on video frames
-- **State Management**: Streamlit session state stores pose predictions and hand keypoints
+- **Web Framework**: Flask handles web routing and serving HTML templates
 
 ### Key Differences Between Apps
-- `app.py` uses aipose YoloV7Pose model and stores prediction arrays in session state
+- `app.py` uses aipose YoloV7Pose model for pose detection
 - `app_mediapipe.py` uses MediaPipe's pose landmarker with a pre-trained model file (`pose_landmarker.task`)
 - `app_beetles.py` extends the aipose app with interactive beetle creatures (kudlanka and blecha) that exhibit different behaviors based on human presence
+- `app_frame_capture.py` captures video frames to disk for debugging purposes
+- `app_beetles_replay.py` replays saved frames with beetle behavior for debugging
 - MediaPipe version includes segmentation mask output capability
 
 ### Beetle Behavior System
@@ -69,7 +79,7 @@ ruff format .
 - Beetle images are loaded from the `img/` directory
 
 ### Dependencies
-- **Core**: streamlit, opencv-python, torch, pandas
+- **Core**: flask, opencv-python, torch, pandas
 - **Pose Detection**: aipose (YoloV7), mediapipe (commented out in pyproject.toml)
 - **Development**: ruff for linting and formatting
 
@@ -139,7 +149,7 @@ All new code should use modern Python type annotations:
 ### Error Handling
 - Use proper exception handling where appropriate
 - Log errors appropriately without spamming the console
-- Provide meaningful error messages to users via Streamlit's error display
+- Provide meaningful error messages to users via Flask's error handling
 
 ### Tests
 - every function apart from the app file should have a test
